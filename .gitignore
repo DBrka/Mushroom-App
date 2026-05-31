@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+android/build/
+android/.gradle/
+android/app/build/
+android/app/.cxx/
+*.local
+.DS_Store
+Thumbs.db
+compress_images.mjs
+update_mushrooms.mjs
+fix_missing.mjs
