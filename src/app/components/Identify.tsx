@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Camera, Image as ImageIcon, ArrowLeft, Loader2, AlertCircle, X, Sparkles } from 'lucide-react';
 import { mushrooms, Mushroom } from '../../data/mushrooms';
 
@@ -16,8 +16,32 @@ export interface IdentificationSuggestion {
 }
 
 // ── mushroom.id API ───────────────────────────────────────────────────────────
-const MUSHROOMID_API_KEY = import.meta.env.VITE_MUSHROOMID_API_KEY ?? '';
-const MUSHROOMID_URL     = 'https://mushroom.kindwise.com/api/v1/identification';
+const MUSHROOMID_API_KEY  = import.meta.env.VITE_MUSHROOMID_API_KEY ?? '';
+const MUSHROOMID_URL      = 'https://mushroom.kindwise.com/api/v1/identification';
+const MUSHROOMID_USAGE    = 'https://mushroom.kindwise.com/api/v1/usage_info';
+
+interface UsageInfo {
+  remaining: number;
+  limit: number;
+  used: number;
+}
+
+async function fetchUsage(): Promise<UsageInfo | null> {
+  try {
+    const res = await fetch(MUSHROOMID_USAGE, {
+      headers: { 'Api-Key': MUSHROOMID_API_KEY },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return {
+      remaining: data?.remaining?.day ?? 0,
+      limit:     data?.credit_limits?.day ?? 100,
+      used:      data?.used?.day ?? 0,
+    };
+  } catch {
+    return null;
+  }
+}
 
 // Pokušaj da nađe gljivu u našoj bazi po latinskom nazivu
 function matchLocal(latinName: string): Mushroom | undefined {
@@ -99,10 +123,16 @@ export function Identify({ onIdentify, onBack }: IdentifyProps) {
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError]         = useState<string | null>(null);
   const [step, setStep]           = useState<string>('');
+  const [usage, setUsage]         = useState<UsageInfo | null>(null);
 
   const cameraRef  = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
   const hasApiKey  = !!MUSHROOMID_API_KEY;
+
+  // Dohvati usage info pri pokretanju
+  useEffect(() => {
+    if (hasApiKey) fetchUsage().then(setUsage);
+  }, [hasApiKey]);
 
   const loadFile = (file: File) => {
     setError(null);
@@ -141,6 +171,8 @@ export function Identify({ onIdentify, onBack }: IdentifyProps) {
       }
       setAnalyzing(false);
       setStep('');
+      // Refresh usage nakon identifikacije
+      if (hasApiKey) fetchUsage().then(setUsage);
       onIdentify(results);
     } catch (err: any) {
       setAnalyzing(false);
@@ -170,10 +202,17 @@ export function Identify({ onIdentify, onBack }: IdentifyProps) {
         </button>
         <div>
           <h2 className="text-xl font-bold" style={{ color: '#1c1917' }}>Identifikacija gljive</h2>
-          {hasApiKey
-            ? <p className="text-xs font-medium" style={{ color: '#16a34a' }}>● mushroom.id aktivan</p>
-            : <p className="text-xs font-medium" style={{ color: '#f59e0b' }}>● Demo mod</p>
-          }
+          {hasApiKey ? (
+            usage ? (
+              <p className="text-xs font-medium" style={{ color: usage.remaining > 10 ? '#16a34a' : usage.remaining > 0 ? '#d97706' : '#dc2626' }}>
+                ● mushroom.id — preostalo: <strong>{usage.remaining}/{usage.limit}</strong> danas
+              </p>
+            ) : (
+              <p className="text-xs font-medium" style={{ color: '#16a34a' }}>● mushroom.id aktivan</p>
+            )
+          ) : (
+            <p className="text-xs font-medium" style={{ color: '#f59e0b' }}>● Demo mod</p>
+          )}
         </div>
       </div>
 

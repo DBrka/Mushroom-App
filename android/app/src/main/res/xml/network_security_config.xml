@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="false">
+        <!-- Dozvoli HTTPS zahtjeve ka mushroom.id API-u -->
+        <domain includeSubdomains="true">mushroom.kindwise.com</domain>
+        <domain includeSubdomains="true">kindwise.com</domain>
+        <!-- GitHub za slike -->
+        <domain includeSubdomains="true">raw.githubusercontent.com</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
