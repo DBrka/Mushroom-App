@@ -43,21 +43,41 @@ async function fetchUsage(): Promise<UsageInfo | null> {
   }
 }
 
-// Pokušaj da nađe gljivu u našoj bazi po latinskom nazivu
+// Pokušaj da nađe gljivu u našoj bazi po latinskom nazivu (više nivoa preciznosti)
 function matchLocal(latinName: string): Mushroom | undefined {
   const needle = latinName.toLowerCase().trim();
-  // Egzaktan match
+  const parts  = needle.split(' ');
+  const genus  = parts[0];
+  const species = parts[1] ?? '';
+
+  // 1. Egzaktan match cijelog naziva
   const exact = mushrooms.find(m => m.latinName.toLowerCase() === needle);
   if (exact) return exact;
-  // Genus + species
-  const parts = needle.split(' ');
-  if (parts.length >= 2) {
-    const found = mushrooms.find(m => {
+
+  // 2. Genus + species (ignorira varijetete u zagradi, npr. "Boletus edulis var.")
+  if (species) {
+    const gs = mushrooms.find(m => {
       const mp = m.latinName.toLowerCase().split(' ');
-      return mp[0] === parts[0] && mp[1] === parts[1];
+      return mp[0] === genus && mp[1] === species;
     });
-    if (found) return found;
+    if (gs) return gs;
   }
+
+  // 3. Sinonimi — provjeri da li latinski naziv sadrži naš naziv ili obrnuto
+  const synonym = mushrooms.find(m => {
+    const ml = m.latinName.toLowerCase();
+    return ml.includes(needle) || needle.includes(ml);
+  });
+  if (synonym) return synonym;
+
+  // 4. Genus-level fallback — isti rod, odaberi najsličniju vrstu
+  if (genus) {
+    const genusMatch = mushrooms.find(m =>
+      m.latinName.toLowerCase().startsWith(genus + ' ')
+    );
+    if (genusMatch) return genusMatch;
+  }
+
   return undefined;
 }
 
