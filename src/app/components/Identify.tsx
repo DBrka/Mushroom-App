@@ -9,7 +9,7 @@ interface IdentifyProps {
 
 // ── mushroom.id API ───────────────────────────────────────────────────────────
 const MUSHROOMID_API_KEY = import.meta.env.VITE_MUSHROOMID_API_KEY ?? '';
-const MUSHROOMID_URL     = 'https://mushroom.id/api/v2/identification';
+const MUSHROOMID_URL     = 'https://mushroom.kindwise.com/api/v1/identification';
 
 interface MushroomIdSuggestion {
   name: string;           // latinski naziv npr. "Boletus edulis"
@@ -66,9 +66,7 @@ async function identifyWithMushroomId(imageDataUrl: string): Promise<Mushroom[]>
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      images: [imageDataUrl],        // šaljemo kompletni data URL
-      similar_images: false,
-      classification_level: 'species',
+      images: [imageDataUrl],
     }),
   });
 
