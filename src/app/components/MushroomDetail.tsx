@@ -2,61 +2,76 @@ import { useState, useRef, useEffect } from 'react';
 import { ArrowLeft, Utensils, Ban, Skull, MapPin, Leaf, X, ChevronLeft, ChevronRight, Pencil, Plus, Check, Loader2 } from 'lucide-react';
 import { Mushroom, MONTHS_SR } from '../../data/mushrooms';
 
-// ── GitHub upload ──────────────────────────────────────────────────────────
+// ── GitHub config ──────────────────────────────────────────────────────────
 const GH_OWNER  = 'DBrka';
 const GH_REPO   = 'Mushroom-App';
 const GH_BRANCH = 'main';
 const GH_PAT    = import.meta.env.VITE_GITHUB_PAT ?? '';
-const CDN_BASE  = `https://cdn.jsdelivr.net/gh/${GH_OWNER}/${GH_REPO}@${GH_BRANCH}/images/mushrooms`;
 const RAW_BASE  = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/${GH_BRANCH}/images/mushrooms`;
 
-async function uploadToGitHub(filename: string, base64: string): Promise<string> {
-  const path    = `images/mushrooms/${filename}`;
-  const apiUrl  = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${path}`;
-  const headers = { Authorization: `Bearer ${GH_PAT}`, 'Content-Type': 'application/json' };
+// Session cache — avoid re-fetching extra images for the same mushroom
+const extraCache = new Map<number, string[]>();
 
-  // GitHub requires the file's current SHA when updating an existing file
+function ghHeaders() {
+  return { Authorization: `Bearer ${GH_PAT}`, 'Content-Type': 'application/json' };
+}
+
+function ghContentsUrl(filename: string) {
+  return `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/images/mushrooms/${filename}`;
+}
+
+// Check GitHub indices 09–20 in parallel; return URLs for those that exist
+async function fetchExtraImages(mushroomId: number): Promise<string[]> {
+  if (extraCache.has(mushroomId)) return extraCache.get(mushroomId)!;
+  const checks = Array.from({ length: 12 }, (_, i) => {
+    const filename = `m${mushroomId}_${String(9 + i).padStart(2, '0')}.jpg`;
+    return fetch(ghContentsUrl(filename), { headers: ghHeaders() })
+      .then(r => r.ok ? `${RAW_BASE}/${filename}` : null)
+      .catch(() => null);
+  });
+  const results = (await Promise.all(checks)).filter((u): u is string => u !== null);
+  extraCache.set(mushroomId, results);
+  return results;
+}
+
+// Get SHA then PUT — handles both create and update
+async function uploadToGitHub(filename: string, base64: string): Promise<string> {
+  const url = ghContentsUrl(filename);
+  const hdrs = ghHeaders();
   let sha: string | undefined;
-  const check = await fetch(apiUrl, { headers });
-  if (check.ok) {
-    const data = await check.json();
-    sha = data.sha;
-  }
+  const check = await fetch(url, { headers: hdrs });
+  if (check.ok) sha = (await check.json()).sha;
 
   const body: Record<string, string> = { message: `Add ${filename}`, content: base64, branch: GH_BRANCH };
   if (sha) body.sha = sha;
 
-  const res = await fetch(apiUrl, { method: 'PUT', headers, body: JSON.stringify(body) });
+  const res = await fetch(url, { method: 'PUT', headers: hdrs, body: JSON.stringify(body) });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as any).message ?? `HTTP ${res.status}`);
+    const err = await res.json().catch(() => ({}) as any);
+    throw new Error(err.message ?? `HTTP ${res.status}`);
   }
-
-  // Purge jsDelivr CDN cache; use raw.githubusercontent.com immediately (CDN takes a few minutes)
-  await fetch(`https://purge.jsdelivr.net/gh/${GH_OWNER}/${GH_REPO}@${GH_BRANCH}/images/mushrooms/${filename}`).catch(() => {});
+  // Purge CDN cache; use raw URL immediately (CDN can take minutes)
+  fetch(`https://purge.jsdelivr.net/gh/${GH_OWNER}/${GH_REPO}@${GH_BRANCH}/images/mushrooms/${filename}`).catch(() => {});
   return `${RAW_BASE}/${filename}`;
 }
 
-interface MushroomDetailProps {
-  mushroom: Mushroom;
-  onBack: () => void;
+// Get SHA then DELETE
+async function deleteFromGitHub(filename: string): Promise<void> {
+  const url  = ghContentsUrl(filename);
+  const hdrs = ghHeaders();
+  const check = await fetch(url, { headers: hdrs });
+  if (!check.ok) return; // Already gone
+  const { sha } = await check.json();
+  const res = await fetch(url, {
+    method: 'DELETE', headers: hdrs,
+    body: JSON.stringify({ message: `Delete ${filename}`, sha, branch: GH_BRANCH }),
+  });
+  if (!res.ok && res.status !== 404) {
+    const err = await res.json().catch(() => ({}) as any);
+    throw new Error(err.message ?? `HTTP ${res.status}`);
+  }
+  fetch(`https://purge.jsdelivr.net/gh/${GH_OWNER}/${GH_REPO}@${GH_BRANCH}/images/mushrooms/${filename}`).catch(() => {});
 }
-
-const categoryConfig = {
-  jestiva:    { icon: Utensils, label: 'Jestiva',    color: '#166534', bg: '#dcfce7', border: '#86efac', activeBg: '#166534' },
-  nejestiva:  { icon: Ban,      label: 'Nejestiva',  color: '#92400e', bg: '#fef3c7', border: '#fcd34d', activeBg: '#b45309' },
-  smrtonosna: { icon: Skull,    label: 'Smrtonosna', color: '#991b1b', bg: '#fee2e2', border: '#fca5a5', activeBg: '#dc2626' },
-};
-
-const fieldLabels: { key: keyof Mushroom; label: string }[] = [
-  { key: 'cap',       label: 'Klobuk'    },
-  { key: 'gills',     label: 'Listići'   },
-  { key: 'stem',      label: 'Drška'     },
-  { key: 'flesh',     label: 'Meso'      },
-  { key: 'spores',    label: 'Spore'     },
-  { key: 'edibility', label: 'Jestivost' },
-  { key: 'notes',     label: 'Napomene'  },
-];
 
 function storageGet(key: string): string[] {
   try { return JSON.parse(localStorage.getItem(key) ?? '[]'); } catch { return []; }
@@ -84,27 +99,53 @@ async function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
+// ── Component ──────────────────────────────────────────────────────────────
+
+interface MushroomDetailProps {
+  mushroom: Mushroom;
+  onBack: () => void;
+}
+
+const categoryConfig = {
+  jestiva:    { icon: Utensils, label: 'Jestiva',    color: '#166534', bg: '#dcfce7', border: '#86efac', activeBg: '#166534' },
+  nejestiva:  { icon: Ban,      label: 'Nejestiva',  color: '#92400e', bg: '#fef3c7', border: '#fcd34d', activeBg: '#b45309' },
+  smrtonosna: { icon: Skull,    label: 'Smrtonosna', color: '#991b1b', bg: '#fee2e2', border: '#fca5a5', activeBg: '#dc2626' },
+};
+
+const fieldLabels: { key: keyof Mushroom; label: string }[] = [
+  { key: 'cap',       label: 'Klobuk'    },
+  { key: 'gills',     label: 'Listići'   },
+  { key: 'stem',      label: 'Drška'     },
+  { key: 'flesh',     label: 'Meso'      },
+  { key: 'spores',    label: 'Spore'     },
+  { key: 'edibility', label: 'Jestivost' },
+  { key: 'notes',     label: 'Napomene'  },
+];
+
 export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
-  const cfg = categoryConfig[mushroom.category];
+  const cfg  = categoryConfig[mushroom.category];
   const Icon = cfg.icon;
 
-  const [deleted, setDeleted] = useState<string[]>(() => storageGet(`mush_del_${mushroom.id}`));
-  const [added, setAdded] = useState<string[]>(() => storageGet(`mush_add_${mushroom.id}`));
-  const [editMode, setEditMode] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
+  // Standard images hidden locally (deleted from GitHub — URL still in mushrooms.ts)
+  const [localHidden, setLocalHidden] = useState<string[]>(() => storageGet(`mush_del_${mushroom.id}`));
+  // Extra images fetched dynamically from GitHub (index 09+)
+  const [extraImages, setExtraImages]   = useState<string[]>([]);
+  const [loadingExtra, setLoadingExtra] = useState(true);
+  const [editMode, setEditMode]         = useState(false);
+  const [uploading, setUploading]       = useState(false);
+  const [deleting, setDeleting]         = useState(false);
+  const [actionError, setActionError]   = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const baseImages: string[] = mushroom.images?.length ? mushroom.images : [mushroom.image];
-  const allImages: string[] = [...baseImages.filter(u => !deleted.includes(u)), ...added];
+  const allImages: string[]  = [...baseImages.filter(u => !localHidden.includes(u)), ...extraImages];
 
   const [activeIdx, setActiveIdx] = useState(0);
   const safeIdx = Math.min(activeIdx, Math.max(0, allImages.length - 1));
 
   const [lightboxOpen, setLightboxOpen] = useState(false);
-  const [lightboxIdx, setLightboxIdx] = useState(0);
+  const [lightboxIdx,  setLightboxIdx]  = useState(0);
 
-  // Pinch-to-zoom state
   const [zoom, setZoom] = useState(1);
   const [panX, setPanX] = useState(0);
   const [panY, setPanY] = useState(0);
@@ -115,44 +156,73 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
     px0?: number; py0?: number;
   } | null>(null);
 
-  // Reset zoom/pan when image changes in lightbox
   useEffect(() => { setZoom(1); setPanX(0); setPanY(0); }, [lightboxIdx]);
 
-  // ── Image management ──────────────────────────────────────────────────────
+  // Fetch extra images from GitHub on mount
+  useEffect(() => {
+    setLoadingExtra(true);
+    fetchExtraImages(mushroom.id)
+      .then(imgs => setExtraImages(imgs))
+      .catch(() => {})
+      .finally(() => setLoadingExtra(false));
+  }, [mushroom.id]);
 
-  const handleDeleteImage = (url: string) => {
-    const nextDeleted = [...deleted, url];
-    setDeleted(nextDeleted);
-    localStorage.setItem(`mush_del_${mushroom.id}`, JSON.stringify(nextDeleted));
-    const nextAll = [...baseImages.filter(u => !nextDeleted.includes(u)), ...added];
-    if (safeIdx >= nextAll.length) setActiveIdx(Math.max(0, nextAll.length - 1));
+  // ── Delete ────────────────────────────────────────────────────────────────
+
+  const handleDeleteImage = async (url: string) => {
+    setDeleting(true);
+    setActionError(null);
+    try {
+      const filename = url.split('/').pop()!;
+      await deleteFromGitHub(filename);
+
+      if (extraImages.includes(url)) {
+        // Extra image — remove from state and cache
+        const next = extraImages.filter(u => u !== url);
+        setExtraImages(next);
+        extraCache.set(mushroom.id, next);
+      } else {
+        // Standard image — hide locally so the hardcoded URL doesn't show
+        const next = [...localHidden, url];
+        setLocalHidden(next);
+        localStorage.setItem(`mush_del_${mushroom.id}`, JSON.stringify(next));
+      }
+      // Clamp active index
+      setActiveIdx(i => Math.max(0, Math.min(i, allImages.length - 2)));
+    } catch (err: any) {
+      setActionError(err.message ?? 'Brisanje nije uspjelo');
+    } finally {
+      setDeleting(false);
+    }
   };
+
+  // ── Upload ────────────────────────────────────────────────────────────────
 
   const handleAddImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
-    setUploadError(null);
+    setActionError(null);
     setUploading(true);
     try {
       const dataUrl = await fileToDataUrl(file);
-      const base64 = dataUrl.split(',')[1];
-      // Filename: m{id}_{next index padded}.jpg  (starts at 09 after the 8 default images)
-      const nextIndex = baseImages.length + added.length + 1;
-      const filename = `m${mushroom.id}_${String(nextIndex).padStart(2, '0')}.jpg`;
+      const base64  = dataUrl.split(',')[1];
+      // Next index after all known images (base + extra)
+      const nextIdx  = baseImages.length + extraImages.length + 1;
+      const filename = `m${mushroom.id}_${String(nextIdx).padStart(2, '0')}.jpg`;
       const remoteUrl = await uploadToGitHub(filename, base64);
-      const nextAdded = [...added, remoteUrl];
-      setAdded(nextAdded);
-      localStorage.setItem(`mush_add_${mushroom.id}`, JSON.stringify(nextAdded));
-      setActiveIdx(allImages.length); // navigate to newly added
+      const next = [...extraImages, remoteUrl];
+      setExtraImages(next);
+      extraCache.set(mushroom.id, next);
+      setActiveIdx(allImages.length); // go to newly added image
     } catch (err: any) {
-      setUploadError(err.message ?? 'Upload nije uspio');
+      setActionError(err.message ?? 'Upload nije uspio');
     } finally {
       setUploading(false);
     }
   };
 
-  // ── Lightbox touch (pinch-zoom + swipe navigation) ────────────────────────
+  // ── Lightbox touch ────────────────────────────────────────────────────────
 
   const onTouchStart = (e: React.TouchEvent) => {
     if (e.touches.length === 2) {
@@ -197,20 +267,14 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
   };
 
   const heroImage = allImages.length > 0 ? allImages[safeIdx] : null;
+  const busy = uploading || deleting;
 
   return (
     <div className="size-full flex flex-col bg-stone-50">
 
-      {/* Hidden file picker */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        style={{ display: 'none' }}
-        onChange={handleAddImage}
-      />
+      <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleAddImage} />
 
-      {/* ── Hero image ── */}
+      {/* ── Hero ── */}
       <div className="relative h-60 flex-shrink-0">
         {heroImage ? (
           <img
@@ -218,9 +282,7 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
             alt={mushroom.name}
             className="w-full h-full object-cover"
             style={{ cursor: editMode ? 'default' : 'pointer' }}
-            onClick={() => {
-              if (!editMode) { setLightboxIdx(safeIdx); setLightboxOpen(true); }
-            }}
+            onClick={() => { if (!editMode) { setLightboxIdx(safeIdx); setLightboxOpen(true); } }}
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center" style={{ background: '#1c1917' }}>
@@ -230,25 +292,19 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
         <div className="absolute inset-0 pointer-events-none"
           style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.25) 0%, rgba(0,0,0,0.65) 100%)' }} />
 
-        {/* Back */}
         <button onClick={onBack}
           className="absolute top-4 left-4 size-10 flex items-center justify-center rounded-full transition-all active:scale-95"
           style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(8px)' }}>
           <ArrowLeft className="size-5 text-white" />
         </button>
 
-        {/* Edit toggle */}
         <button
-          onClick={() => setEditMode(m => !m)}
+          onClick={() => !busy && setEditMode(m => !m)}
           className="absolute top-4 right-4 size-10 flex items-center justify-center rounded-full transition-all active:scale-95"
-          style={{
-            background: editMode ? 'rgba(74,222,128,0.85)' : 'rgba(0,0,0,0.4)',
-            backdropFilter: 'blur(8px)',
-          }}>
+          style={{ background: editMode ? 'rgba(74,222,128,0.85)' : 'rgba(0,0,0,0.4)', backdropFilter: 'blur(8px)' }}>
           {editMode ? <Check className="size-5 text-white" /> : <Pencil className="size-4 text-white" />}
         </button>
 
-        {/* Image counter (hidden in edit mode) */}
         {!editMode && allImages.length > 1 && (
           <div className="absolute top-4 right-16 px-2.5 py-1 rounded-full text-xs text-white font-medium"
             style={{ background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(8px)' }}>
@@ -256,7 +312,6 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
           </div>
         )}
 
-        {/* Name overlay */}
         <div className="absolute bottom-0 left-0 right-0 p-4 pointer-events-none">
           <h1 className="text-white text-xl font-semibold leading-tight">{mushroom.name}</h1>
           <p className="text-white/70 italic text-sm mt-0.5">{mushroom.latinName}</p>
@@ -264,43 +319,51 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
       </div>
 
       {/* ── Thumbnail strip ── */}
-      {(allImages.length > 1 || editMode) && (
+      {(allImages.length > 1 || editMode || loadingExtra) && (
         <div className="flex-shrink-0 bg-black">
-          <div className="flex gap-1 p-1 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+          <div className="flex gap-1 p-1 overflow-x-auto items-center" style={{ scrollbarWidth: 'none' }}>
             {allImages.map((src, i) => (
-              <div key={i} className="relative flex-shrink-0">
+              <div key={src} className="relative flex-shrink-0">
                 <button
                   onClick={() => setActiveIdx(i)}
                   className="rounded overflow-hidden block transition-all active:scale-95"
                   style={{
                     width: 56, height: 44,
                     outline: i === safeIdx ? '2px solid #4ade80' : '2px solid transparent',
-                    outlineOffset: 0,
                     opacity: i === safeIdx ? 1 : 0.55,
                   }}>
                   <img src={src} alt="" className="w-full h-full object-cover" />
                 </button>
                 {editMode && (
                   <button
-                    onClick={() => handleDeleteImage(src)}
+                    onClick={() => !busy && handleDeleteImage(src)}
                     className="absolute -top-1 -right-1 size-5 rounded-full flex items-center justify-center z-10"
-                    style={{ background: '#dc2626' }}>
-                    <X className="size-3 text-white" />
+                    style={{ background: deleting ? '#6b7280' : '#dc2626' }}
+                    disabled={busy}>
+                    {deleting ? <Loader2 className="size-3 text-white animate-spin" /> : <X className="size-3 text-white" />}
                   </button>
                 )}
               </div>
             ))}
 
+            {/* Loading extra images indicator */}
+            {loadingExtra && (
+              <div className="flex-shrink-0 rounded flex items-center justify-center" style={{ width: 44, height: 44 }}>
+                <Loader2 className="size-4 text-white/30 animate-spin" />
+              </div>
+            )}
+
             {/* Add image button */}
             {editMode && (
               <button
-                onClick={() => !uploading && fileInputRef.current?.click()}
+                onClick={() => !busy && fileInputRef.current?.click()}
                 className="flex-shrink-0 rounded flex flex-col items-center justify-center gap-0.5 transition-all active:scale-95"
                 style={{
                   width: 64, height: 44,
-                  background: uploading ? 'rgba(74,222,128,0.15)' : 'rgba(74,222,128,0.12)',
+                  background: 'rgba(74,222,128,0.12)',
                   border: '1.5px dashed rgba(74,222,128,0.5)',
-                }}>
+                }}
+                disabled={busy}>
                 {uploading
                   ? <Loader2 className="size-4 text-green-400 animate-spin" />
                   : <Plus className="size-4 text-green-400" />}
@@ -313,26 +376,24 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
         </div>
       )}
 
-      {/* Upload error */}
-      {uploadError && (
+      {/* Action error */}
+      {actionError && (
         <div className="flex-shrink-0 px-4 py-2 flex items-center gap-2" style={{ background: '#fef2f2' }}>
-          <span className="text-red-600 text-xs flex-1">Greška: {uploadError}</span>
-          <button onClick={() => setUploadError(null)}><X className="size-4 text-red-400" /></button>
+          <span className="text-red-600 text-xs flex-1">Greška: {actionError}</span>
+          <button onClick={() => setActionError(null)}><X className="size-4 text-red-400" /></button>
         </div>
       )}
 
-      {/* ── Scrollable content ── */}
+      {/* ── Content ── */}
       <div className="flex-1 overflow-auto">
         <div className="max-w-2xl mx-auto p-4 space-y-4">
 
-          {/* Category badge */}
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full border text-sm font-medium"
             style={{ color: cfg.color, background: cfg.bg, borderColor: cfg.border }}>
             <Icon className="size-4" />
             {cfg.label}
           </div>
 
-          {/* Season calendar */}
           <div className="bg-white rounded-2xl p-4 shadow-sm border border-stone-100">
             <div className="flex items-center gap-2 mb-3">
               <Leaf className="size-4 text-emerald-600" />
@@ -343,10 +404,8 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
                 const active = mushroom.activeMonths.includes(i + 1);
                 return (
                   <div key={month} className="flex flex-col items-center gap-1">
-                    <div className="rounded h-7 w-full flex items-center justify-center text-xs font-bold transition-colors"
-                      style={active
-                        ? { background: cfg.activeBg, color: 'white' }
-                        : { background: '#f1f5f9', color: '#94a3b8' }}>
+                    <div className="rounded h-7 w-full flex items-center justify-center text-xs font-bold"
+                      style={active ? { background: cfg.activeBg, color: 'white' } : { background: '#f1f5f9', color: '#94a3b8' }}>
                       {active ? '●' : ''}
                     </div>
                     <span className="text-xs text-stone-400 leading-none" style={{ fontSize: 9 }}>{month}</span>
@@ -360,7 +419,6 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
             </div>
           </div>
 
-          {/* Description fields */}
           <div className="bg-white rounded-2xl shadow-sm border border-stone-100 overflow-hidden">
             {fieldLabels.map(({ key, label }, idx) => {
               const val = mushroom[key];
@@ -376,7 +434,6 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
             })}
           </div>
 
-          {/* Habitat */}
           <div className="bg-white rounded-2xl p-4 shadow-sm border border-stone-100 flex gap-3 items-start">
             <MapPin className="size-4 text-emerald-600 flex-shrink-0 mt-0.5" />
             <div>
@@ -385,14 +442,13 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
             </div>
           </div>
 
-          {/* Danger warnings */}
           {mushroom.category === 'smrtonosna' && (
             <div className="rounded-2xl p-4 border-2" style={{ background: '#fff1f2', borderColor: '#fca5a5' }}>
               <div className="flex gap-3 items-start">
                 <Skull className="size-5 flex-shrink-0 mt-0.5" style={{ color: '#991b1b' }} />
                 <p className="text-sm leading-relaxed" style={{ color: '#7f1d1d' }}>
                   <strong>OPASNOST:</strong> Ova gljiva je smrtonosno otrovana. Nikada je ne konzumirajte.
-                  Čak i mali dijelovi mogu uzrokovati zatajenje organa. U slučaju kontakta odmah potražite ljekarsku pomoć.
+                  Čak i mali dijelovi mogu uzrokovati zatajenje organa.
                 </p>
               </div>
             </div>
@@ -403,14 +459,12 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
               <div className="flex gap-3 items-start">
                 <Ban className="size-5 flex-shrink-0 mt-0.5" style={{ color: '#92400e' }} />
                 <p className="text-sm leading-relaxed" style={{ color: '#78350f' }}>
-                  <strong>UPOZORENJE:</strong> Ova gljiva nije jestiva i može izazvati trovanje ili
-                  ozbiljne zdravstvene probleme. Ne konzumirajte je.
+                  <strong>UPOZORENJE:</strong> Ova gljiva nije jestiva i može izazvati trovanje ili ozbiljne zdravstvene probleme.
                 </p>
               </div>
             </div>
           )}
 
-          {/* Disclaimer */}
           <div className="rounded-xl p-4 text-center" style={{ background: '#f8fafc' }}>
             <p className="text-xs text-stone-500 leading-relaxed">
               Ova aplikacija služi isključivo u obrazovne svrhe. Nikada ne konzumirajte
@@ -422,14 +476,13 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
         </div>
       </div>
 
-      {/* ── Lightbox with pinch-to-zoom ── */}
+      {/* ── Lightbox ── */}
       {lightboxOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center"
           style={{ background: 'rgba(0,0,0,0.97)', touchAction: 'none' }}
           onClick={() => { if (zoom <= 1) setLightboxOpen(false); }}
         >
-          {/* Close */}
           <button
             className="absolute top-4 right-4 size-11 rounded-full flex items-center justify-center z-10 transition-all active:scale-90"
             style={{ background: 'rgba(255,255,255,0.12)' }}
@@ -437,21 +490,16 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
             <X className="size-6 text-white" />
           </button>
 
-          {/* Title */}
           <div className="absolute top-4 left-0 right-0 text-center pointer-events-none px-16">
             <p className="text-white font-semibold text-sm">{mushroom.name}</p>
             <p className="text-white/50 italic text-xs mt-0.5">{mushroom.latinName}</p>
           </div>
 
-          {/* Counter + zoom % */}
           <div className="absolute top-14 left-0 right-0 text-center pointer-events-none">
             <p className="text-white/50 text-xs">{lightboxIdx + 1} / {allImages.length}</p>
-            {zoom > 1.05 && (
-              <p className="text-white/30 text-xs mt-0.5">{Math.round(zoom * 100)}%</p>
-            )}
+            {zoom > 1.05 && <p className="text-white/30 text-xs mt-0.5">{Math.round(zoom * 100)}%</p>}
           </div>
 
-          {/* Prev / Next arrows — hidden when zoomed in */}
           {zoom <= 1 && allImages.length > 1 && (
             <>
               <button
@@ -469,14 +517,8 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
             </>
           )}
 
-          {/* Zoomable + pannable image area */}
           <div
-            style={{
-              position: 'absolute', inset: 0,
-              padding: '72px 60px 60px',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              overflow: 'hidden',
-            }}
+            style={{ position: 'absolute', inset: 0, padding: '72px 60px 60px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}
             onTouchStart={onTouchStart}
             onTouchMove={onTouchMove}
             onTouchEnd={onTouchEnd}
@@ -486,32 +528,20 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
               src={allImages[lightboxIdx]}
               alt={mushroom.name}
               style={{
-                maxWidth: '100%',
-                maxHeight: '100%',
-                objectFit: 'contain',
+                maxWidth: '100%', maxHeight: '100%', objectFit: 'contain',
                 transform: `translate(${panX}px, ${panY}px) scale(${zoom})`,
                 transformOrigin: 'center center',
-                userSelect: 'none',
-                WebkitUserSelect: 'none',
-                pointerEvents: 'none',
+                userSelect: 'none', WebkitUserSelect: 'none', pointerEvents: 'none',
               }}
               draggable={false}
             />
           </div>
 
-          {/* Dot indicators */}
           {allImages.length > 1 && (
             <div className="absolute bottom-6 left-0 right-0 flex justify-center gap-1.5 flex-wrap px-8 pointer-events-none">
               {allImages.map((_, i) => (
-                <div
-                  key={i}
-                  className="rounded-full transition-all"
-                  style={{
-                    width: i === lightboxIdx ? 20 : 6,
-                    height: 6,
-                    background: i === lightboxIdx ? '#4ade80' : 'rgba(255,255,255,0.35)',
-                  }}
-                />
+                <div key={i} className="rounded-full transition-all"
+                  style={{ width: i === lightboxIdx ? 20 : 6, height: 6, background: i === lightboxIdx ? '#4ade80' : 'rgba(255,255,255,0.35)' }} />
               ))}
             </div>
           )}
