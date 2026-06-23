@@ -11,26 +11,29 @@ const CDN_BASE  = `https://cdn.jsdelivr.net/gh/${GH_OWNER}/${GH_REPO}@${GH_BRANC
 const RAW_BASE  = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/${GH_BRANCH}/images/mushrooms`;
 
 async function uploadToGitHub(filename: string, base64: string): Promise<string> {
-  const path = `images/mushrooms/${filename}`;
-  const res = await fetch(`https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${path}`, {
-    method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${GH_PAT}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      message: `Add ${filename}`,
-      content: base64,
-      branch: GH_BRANCH,
-    }),
-  });
+  const path    = `images/mushrooms/${filename}`;
+  const apiUrl  = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${path}`;
+  const headers = { Authorization: `Bearer ${GH_PAT}`, 'Content-Type': 'application/json' };
+
+  // GitHub requires the file's current SHA when updating an existing file
+  let sha: string | undefined;
+  const check = await fetch(apiUrl, { headers });
+  if (check.ok) {
+    const data = await check.json();
+    sha = data.sha;
+  }
+
+  const body: Record<string, string> = { message: `Add ${filename}`, content: base64, branch: GH_BRANCH };
+  if (sha) body.sha = sha;
+
+  const res = await fetch(apiUrl, { method: 'PUT', headers, body: JSON.stringify(body) });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as any).message ?? `HTTP ${res.status}`);
   }
-  // Purge jsDelivr CDN cache so new image is available immediately
+
+  // Purge jsDelivr CDN cache; use raw.githubusercontent.com immediately (CDN takes a few minutes)
   await fetch(`https://purge.jsdelivr.net/gh/${GH_OWNER}/${GH_REPO}@${GH_BRANCH}/images/mushrooms/${filename}`).catch(() => {});
-  // Use raw.githubusercontent.com immediately (CDN may take a few minutes)
   return `${RAW_BASE}/${filename}`;
 }
 
