@@ -4,8 +4,10 @@
         <!-- Dozvoli HTTPS zahtjeve ka mushroom.id API-u -->
         <domain includeSubdomains="true">mushroom.kindwise.com</domain>
         <domain includeSubdomains="true">kindwise.com</domain>
-        <!-- GitHub za slike -->
+        <!-- GitHub raw i jsDelivr CDN za slike -->
         <domain includeSubdomains="true">raw.githubusercontent.com</domain>
+        <domain includeSubdomains="true">cdn.jsdelivr.net</domain>
+        <domain includeSubdomains="true">jsdelivr.net</domain>
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>

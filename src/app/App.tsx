@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { App as CapApp } from '@capacitor/app';
-import { IntroScreen } from './components/IntroScreen';
 import { Home } from './components/Home';
 import { Identify } from './components/Identify';
 import { Library } from './components/Library';
@@ -10,10 +9,10 @@ import { SveOGljivama } from './components/SveOGljivama';
 import { Mushroom } from '../data/mushrooms';
 import { IdentificationSuggestion } from './components/Identify';
 
-type View = 'intro' | 'home' | 'identify' | 'library' | 'detail' | 'result' | 'literatura';
+type View = 'home' | 'identify' | 'library' | 'detail' | 'result' | 'literatura';
 
 export default function App() {
-  const [currentView, setCurrentView] = useState<View>('intro');
+  const [currentView, setCurrentView] = useState<View>('home');
   const [selectedMushroom, setSelectedMushroom] = useState<Mushroom | null>(null);
   const [identifiedResults, setIdentifiedResults] = useState<IdentificationSuggestion[]>([]);
   const [previousView, setPreviousView] = useState<View>('library');
@@ -35,9 +34,6 @@ export default function App() {
   useEffect(() => {
     const handler = CapApp.addListener('backButton', () => {
       switch (currentView) {
-        case 'intro':
-          CapApp.exitApp();
-          break;
         case 'home':
           CapApp.exitApp();
           break;
@@ -65,9 +61,6 @@ export default function App() {
 
   return (
     <div className="size-full" style={{ background: '#f8f7f4' }}>
-      {currentView === 'intro' && (
-        <IntroScreen onFinish={() => navigate('home')} />
-      )}
       {currentView === 'home' && (
         <Home onNavigate={navigate} />
       )}

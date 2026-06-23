@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { ArrowLeft, Utensils, Ban, Skull, MapPin, Leaf, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { ArrowLeft, Utensils, Ban, Skull, MapPin, Leaf, X, ChevronLeft, ChevronRight, Pencil, Plus, Check } from 'lucide-react';
 import { Mushroom, MONTHS_SR } from '../../data/mushrooms';
 
 interface MushroomDetailProps {
@@ -23,60 +23,188 @@ const fieldLabels: { key: keyof Mushroom; label: string }[] = [
   { key: 'notes',     label: 'Napomene'  },
 ];
 
+function storageGet(key: string): string[] {
+  try { return JSON.parse(localStorage.getItem(key) ?? '[]'); } catch { return []; }
+}
+
+async function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = ev => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        const MAX = 1200;
+        const ratio = Math.min(MAX / img.width, MAX / img.height, 1);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * ratio);
+        canvas.height = Math.round(img.height * ratio);
+        canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.82));
+      };
+      img.src = ev.target!.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
   const cfg = categoryConfig[mushroom.category];
   const Icon = cfg.icon;
 
-  // Use images array if available, otherwise fall back to single image
-  const allImages: string[] = mushroom.images && mushroom.images.length > 0
-    ? mushroom.images
-    : [mushroom.image];
+  const [deleted, setDeleted] = useState<string[]>(() => storageGet(`mush_del_${mushroom.id}`));
+  const [added, setAdded] = useState<string[]>(() => storageGet(`mush_add_${mushroom.id}`));
+  const [editMode, setEditMode] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const baseImages: string[] = mushroom.images?.length ? mushroom.images : [mushroom.image];
+  const allImages: string[] = [...baseImages.filter(u => !deleted.includes(u)), ...added];
 
   const [activeIdx, setActiveIdx] = useState(0);
+  const safeIdx = Math.min(activeIdx, Math.max(0, allImages.length - 1));
+
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIdx, setLightboxIdx] = useState(0);
 
-  const openLightbox = (idx: number) => {
-    setLightboxIdx(idx);
-    setLightboxOpen(true);
+  // Pinch-to-zoom state
+  const [zoom, setZoom] = useState(1);
+  const [panX, setPanX] = useState(0);
+  const [panY, setPanY] = useState(0);
+  const touchRef = useRef<{
+    type: 'pinch' | 'swipe' | 'pan';
+    d0?: number; z0?: number;
+    x0?: number; y0?: number;
+    px0?: number; py0?: number;
+  } | null>(null);
+
+  // Reset zoom/pan when image changes in lightbox
+  useEffect(() => { setZoom(1); setPanX(0); setPanY(0); }, [lightboxIdx]);
+
+  // ── Image management ──────────────────────────────────────────────────────
+
+  const handleDeleteImage = (url: string) => {
+    const nextDeleted = [...deleted, url];
+    setDeleted(nextDeleted);
+    localStorage.setItem(`mush_del_${mushroom.id}`, JSON.stringify(nextDeleted));
+    const nextAll = [...baseImages.filter(u => !nextDeleted.includes(u)), ...added];
+    if (safeIdx >= nextAll.length) setActiveIdx(Math.max(0, nextAll.length - 1));
   };
 
-  const lightboxPrev = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setLightboxIdx(i => (i - 1 + allImages.length) % allImages.length);
+  const handleAddImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      const nextAdded = [...added, dataUrl];
+      setAdded(nextAdded);
+      localStorage.setItem(`mush_add_${mushroom.id}`, JSON.stringify(nextAdded));
+      setActiveIdx(allImages.length); // navigate to newly added image
+    } catch { /* ignore */ }
+    e.target.value = '';
   };
 
-  const lightboxNext = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setLightboxIdx(i => (i + 1) % allImages.length);
+  // ── Lightbox touch (pinch-zoom + swipe navigation) ────────────────────────
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      touchRef.current = { type: 'pinch', d0: Math.hypot(dx, dy), z0: zoom };
+    } else if (zoom > 1) {
+      touchRef.current = { type: 'pan', x0: e.touches[0].clientX, y0: e.touches[0].clientY, px0: panX, py0: panY };
+    } else {
+      touchRef.current = { type: 'swipe', x0: e.touches[0].clientX, y0: e.touches[0].clientY };
+    }
   };
+
+  const onTouchMove = (e: React.TouchEvent) => {
+    const t = touchRef.current;
+    if (!t) return;
+    if (t.type === 'pinch' && e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      setZoom(Math.max(1, Math.min(5, t.z0! * (Math.hypot(dx, dy) / t.d0!))));
+    } else if (t.type === 'pan') {
+      setPanX(t.px0! + (e.touches[0].clientX - t.x0!));
+      setPanY(t.py0! + (e.touches[0].clientY - t.y0!));
+    }
+  };
+
+  const onTouchEnd = (e: React.TouchEvent) => {
+    const t = touchRef.current;
+    if (!t) return;
+    if (t.type === 'pinch') {
+      if (zoom < 1.1) { setZoom(1); setPanX(0); setPanY(0); }
+    } else if (t.type === 'swipe' && e.changedTouches.length > 0 && allImages.length > 1) {
+      const dx = e.changedTouches[0].clientX - t.x0!;
+      const dy = e.changedTouches[0].clientY - t.y0!;
+      if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        setLightboxIdx(i => dx < 0
+          ? (i + 1) % allImages.length
+          : (i - 1 + allImages.length) % allImages.length);
+      }
+    }
+    touchRef.current = null;
+  };
+
+  const heroImage = allImages.length > 0 ? allImages[safeIdx] : null;
 
   return (
     <div className="size-full flex flex-col bg-stone-50">
 
-      {/* Hero image */}
+      {/* Hidden file picker */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: 'none' }}
+        onChange={handleAddImage}
+      />
+
+      {/* ── Hero image ── */}
       <div className="relative h-60 flex-shrink-0">
-        <img
-          src={allImages[activeIdx]}
-          alt={mushroom.name}
-          className="w-full h-full object-cover cursor-pointer"
-          onClick={() => openLightbox(activeIdx)}
-        />
+        {heroImage ? (
+          <img
+            src={heroImage}
+            alt={mushroom.name}
+            className="w-full h-full object-cover"
+            style={{ cursor: editMode ? 'default' : 'pointer' }}
+            onClick={() => {
+              if (!editMode) { setLightboxIdx(safeIdx); setLightboxOpen(true); }
+            }}
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center" style={{ background: '#1c1917' }}>
+            <span className="text-6xl opacity-20">🍄</span>
+          </div>
+        )}
         <div className="absolute inset-0 pointer-events-none"
           style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.25) 0%, rgba(0,0,0,0.65) 100%)' }} />
 
-        {/* Back button */}
+        {/* Back */}
         <button onClick={onBack}
           className="absolute top-4 left-4 size-10 flex items-center justify-center rounded-full transition-all active:scale-95"
           style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(8px)' }}>
           <ArrowLeft className="size-5 text-white" />
         </button>
 
-        {/* Image counter */}
-        {allImages.length > 1 && (
-          <div className="absolute top-4 right-4 px-2.5 py-1 rounded-full text-xs text-white font-medium"
+        {/* Edit toggle */}
+        <button
+          onClick={() => setEditMode(m => !m)}
+          className="absolute top-4 right-4 size-10 flex items-center justify-center rounded-full transition-all active:scale-95"
+          style={{
+            background: editMode ? 'rgba(74,222,128,0.85)' : 'rgba(0,0,0,0.4)',
+            backdropFilter: 'blur(8px)',
+          }}>
+          {editMode ? <Check className="size-5 text-white" /> : <Pencil className="size-4 text-white" />}
+        </button>
+
+        {/* Image counter (hidden in edit mode) */}
+        {!editMode && allImages.length > 1 && (
+          <div className="absolute top-4 right-16 px-2.5 py-1 rounded-full text-xs text-white font-medium"
             style={{ background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(8px)' }}>
-            {activeIdx + 1} / {allImages.length}
+            {safeIdx + 1} / {allImages.length}
           </div>
         )}
 
@@ -87,30 +215,52 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
         </div>
       </div>
 
-      {/* Thumbnail strip */}
-      {allImages.length > 1 && (
+      {/* ── Thumbnail strip ── */}
+      {(allImages.length > 1 || editMode) && (
         <div className="flex-shrink-0 bg-black">
           <div className="flex gap-1 p-1 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
             {allImages.map((src, i) => (
-              <button
-                key={i}
-                onClick={() => setActiveIdx(i)}
-                className="flex-shrink-0 rounded overflow-hidden transition-all active:scale-95"
-                style={{
-                  width: 56,
-                  height: 44,
-                  outline: i === activeIdx ? '2px solid #4ade80' : '2px solid transparent',
-                  outlineOffset: 0,
-                  opacity: i === activeIdx ? 1 : 0.55,
-                }}>
-                <img src={src} alt="" className="w-full h-full object-cover" />
-              </button>
+              <div key={i} className="relative flex-shrink-0">
+                <button
+                  onClick={() => setActiveIdx(i)}
+                  className="rounded overflow-hidden block transition-all active:scale-95"
+                  style={{
+                    width: 56, height: 44,
+                    outline: i === safeIdx ? '2px solid #4ade80' : '2px solid transparent',
+                    outlineOffset: 0,
+                    opacity: i === safeIdx ? 1 : 0.55,
+                  }}>
+                  <img src={src} alt="" className="w-full h-full object-cover" />
+                </button>
+                {editMode && (
+                  <button
+                    onClick={() => handleDeleteImage(src)}
+                    className="absolute -top-1 -right-1 size-5 rounded-full flex items-center justify-center z-10"
+                    style={{ background: '#dc2626' }}>
+                    <X className="size-3 text-white" />
+                  </button>
+                )}
+              </div>
             ))}
+
+            {/* Add image button */}
+            {editMode && (
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="flex-shrink-0 rounded flex items-center justify-center transition-all active:scale-95"
+                style={{
+                  width: 56, height: 44,
+                  background: 'rgba(255,255,255,0.08)',
+                  border: '1.5px dashed rgba(255,255,255,0.35)',
+                }}>
+                <Plus className="size-5 text-white/50" />
+              </button>
+            )}
           </div>
         </div>
       )}
 
-      {/* Scrollable content */}
+      {/* ── Scrollable content ── */}
       <div className="flex-1 overflow-auto">
         <div className="max-w-2xl mx-auto p-4 space-y-4">
 
@@ -144,7 +294,7 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
               })}
             </div>
             <div className="flex items-center gap-2 mt-2">
-              <div className="size-3 rounded" style={{ background: '#166534' }} />
+              <div className="size-3 rounded" style={{ background: cfg.activeBg }} />
               <span className="text-xs text-stone-500">Aktivna sezona</span>
             </div>
           </div>
@@ -174,7 +324,7 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
             </div>
           </div>
 
-          {/* Warning for dangerous mushrooms */}
+          {/* Danger warnings */}
           {mushroom.category === 'smrtonosna' && (
             <div className="rounded-2xl p-4 border-2" style={{ background: '#fff1f2', borderColor: '#fca5a5' }}>
               <div className="flex gap-3 items-start">
@@ -211,18 +361,18 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
         </div>
       </div>
 
-      {/* Lightbox */}
+      {/* ── Lightbox with pinch-to-zoom ── */}
       {lightboxOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ background: 'rgba(0,0,0,0.97)' }}
-          onClick={() => setLightboxOpen(false)}
+          style={{ background: 'rgba(0,0,0,0.97)', touchAction: 'none' }}
+          onClick={() => { if (zoom <= 1) setLightboxOpen(false); }}
         >
           {/* Close */}
           <button
             className="absolute top-4 right-4 size-11 rounded-full flex items-center justify-center z-10 transition-all active:scale-90"
             style={{ background: 'rgba(255,255,255,0.12)' }}
-            onClick={() => setLightboxOpen(false)}>
+            onClick={e => { e.stopPropagation(); setLightboxOpen(false); }}>
             <X className="size-6 text-white" />
           </button>
 
@@ -232,47 +382,68 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
             <p className="text-white/50 italic text-xs mt-0.5">{mushroom.latinName}</p>
           </div>
 
-          {/* Counter */}
+          {/* Counter + zoom % */}
           <div className="absolute top-14 left-0 right-0 text-center pointer-events-none">
             <p className="text-white/50 text-xs">{lightboxIdx + 1} / {allImages.length}</p>
+            {zoom > 1.05 && (
+              <p className="text-white/30 text-xs mt-0.5">{Math.round(zoom * 100)}%</p>
+            )}
           </div>
 
-          {/* Prev */}
-          {allImages.length > 1 && (
-            <button
-              className="absolute left-3 size-11 rounded-full flex items-center justify-center z-10 transition-all active:scale-90"
-              style={{ background: 'rgba(255,255,255,0.12)' }}
-              onClick={lightboxPrev}>
-              <ChevronLeft className="size-6 text-white" />
-            </button>
+          {/* Prev / Next arrows — hidden when zoomed in */}
+          {zoom <= 1 && allImages.length > 1 && (
+            <>
+              <button
+                className="absolute left-3 size-11 rounded-full flex items-center justify-center z-10 transition-all active:scale-90"
+                style={{ background: 'rgba(255,255,255,0.12)' }}
+                onClick={e => { e.stopPropagation(); setLightboxIdx(i => (i - 1 + allImages.length) % allImages.length); }}>
+                <ChevronLeft className="size-6 text-white" />
+              </button>
+              <button
+                className="absolute right-3 size-11 rounded-full flex items-center justify-center z-10 transition-all active:scale-90"
+                style={{ background: 'rgba(255,255,255,0.12)' }}
+                onClick={e => { e.stopPropagation(); setLightboxIdx(i => (i + 1) % allImages.length); }}>
+                <ChevronRight className="size-6 text-white" />
+              </button>
+            </>
           )}
 
-          {/* Image */}
-          <img
-            src={allImages[lightboxIdx]}
-            alt={mushroom.name}
-            className="max-w-full max-h-full object-contain"
-            style={{ padding: '72px 60px 20px' }}
+          {/* Zoomable + pannable image area */}
+          <div
+            style={{
+              position: 'absolute', inset: 0,
+              padding: '72px 60px 60px',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              overflow: 'hidden',
+            }}
+            onTouchStart={onTouchStart}
+            onTouchMove={onTouchMove}
+            onTouchEnd={onTouchEnd}
             onClick={e => e.stopPropagation()}
-          />
+          >
+            <img
+              src={allImages[lightboxIdx]}
+              alt={mushroom.name}
+              style={{
+                maxWidth: '100%',
+                maxHeight: '100%',
+                objectFit: 'contain',
+                transform: `translate(${panX}px, ${panY}px) scale(${zoom})`,
+                transformOrigin: 'center center',
+                userSelect: 'none',
+                WebkitUserSelect: 'none',
+                pointerEvents: 'none',
+              }}
+              draggable={false}
+            />
+          </div>
 
-          {/* Next */}
+          {/* Dot indicators */}
           {allImages.length > 1 && (
-            <button
-              className="absolute right-3 size-11 rounded-full flex items-center justify-center z-10 transition-all active:scale-90"
-              style={{ background: 'rgba(255,255,255,0.12)' }}
-              onClick={lightboxNext}>
-              <ChevronRight className="size-6 text-white" />
-            </button>
-          )}
-
-          {/* Thumbnail dots */}
-          {allImages.length > 1 && (
-            <div className="absolute bottom-6 left-0 right-0 flex justify-center gap-1.5 flex-wrap px-8">
+            <div className="absolute bottom-6 left-0 right-0 flex justify-center gap-1.5 flex-wrap px-8 pointer-events-none">
               {allImages.map((_, i) => (
-                <button
+                <div
                   key={i}
-                  onClick={e => { e.stopPropagation(); setLightboxIdx(i); }}
                   className="rounded-full transition-all"
                   style={{
                     width: i === lightboxIdx ? 20 : 6,
