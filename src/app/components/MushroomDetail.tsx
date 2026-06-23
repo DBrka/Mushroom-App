@@ -1,6 +1,38 @@
 import { useState, useRef, useEffect } from 'react';
-import { ArrowLeft, Utensils, Ban, Skull, MapPin, Leaf, X, ChevronLeft, ChevronRight, Pencil, Plus, Check } from 'lucide-react';
+import { ArrowLeft, Utensils, Ban, Skull, MapPin, Leaf, X, ChevronLeft, ChevronRight, Pencil, Plus, Check, Loader2 } from 'lucide-react';
 import { Mushroom, MONTHS_SR } from '../../data/mushrooms';
+
+// ── GitHub upload ──────────────────────────────────────────────────────────
+const GH_OWNER  = 'DBrka';
+const GH_REPO   = 'Mushroom-App';
+const GH_BRANCH = 'main';
+const GH_PAT    = import.meta.env.VITE_GITHUB_PAT ?? '';
+const CDN_BASE  = `https://cdn.jsdelivr.net/gh/${GH_OWNER}/${GH_REPO}@${GH_BRANCH}/images/mushrooms`;
+const RAW_BASE  = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/${GH_BRANCH}/images/mushrooms`;
+
+async function uploadToGitHub(filename: string, base64: string): Promise<string> {
+  const path = `images/mushrooms/${filename}`;
+  const res = await fetch(`https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${path}`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${GH_PAT}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      message: `Add ${filename}`,
+      content: base64,
+      branch: GH_BRANCH,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as any).message ?? `HTTP ${res.status}`);
+  }
+  // Purge jsDelivr CDN cache so new image is available immediately
+  await fetch(`https://purge.jsdelivr.net/gh/${GH_OWNER}/${GH_REPO}@${GH_BRANCH}/images/mushrooms/${filename}`).catch(() => {});
+  // Use raw.githubusercontent.com immediately (CDN may take a few minutes)
+  return `${RAW_BASE}/${filename}`;
+}
 
 interface MushroomDetailProps {
   mushroom: Mushroom;
@@ -56,6 +88,8 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
   const [deleted, setDeleted] = useState<string[]>(() => storageGet(`mush_del_${mushroom.id}`));
   const [added, setAdded] = useState<string[]>(() => storageGet(`mush_add_${mushroom.id}`));
   const [editMode, setEditMode] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const baseImages: string[] = mushroom.images?.length ? mushroom.images : [mushroom.image];
@@ -94,14 +128,25 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
   const handleAddImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = '';
+    setUploadError(null);
+    setUploading(true);
     try {
       const dataUrl = await fileToDataUrl(file);
-      const nextAdded = [...added, dataUrl];
+      const base64 = dataUrl.split(',')[1];
+      // Filename: m{id}_{next index padded}.jpg  (starts at 09 after the 8 default images)
+      const nextIndex = baseImages.length + added.length + 1;
+      const filename = `m${mushroom.id}_${String(nextIndex).padStart(2, '0')}.jpg`;
+      const remoteUrl = await uploadToGitHub(filename, base64);
+      const nextAdded = [...added, remoteUrl];
       setAdded(nextAdded);
       localStorage.setItem(`mush_add_${mushroom.id}`, JSON.stringify(nextAdded));
-      setActiveIdx(allImages.length); // navigate to newly added image
-    } catch { /* ignore */ }
-    e.target.value = '';
+      setActiveIdx(allImages.length); // navigate to newly added
+    } catch (err: any) {
+      setUploadError(err.message ?? 'Upload nije uspio');
+    } finally {
+      setUploading(false);
+    }
   };
 
   // ── Lightbox touch (pinch-zoom + swipe navigation) ────────────────────────
@@ -246,17 +291,30 @@ export function MushroomDetail({ mushroom, onBack }: MushroomDetailProps) {
             {/* Add image button */}
             {editMode && (
               <button
-                onClick={() => fileInputRef.current?.click()}
-                className="flex-shrink-0 rounded flex items-center justify-center transition-all active:scale-95"
+                onClick={() => !uploading && fileInputRef.current?.click()}
+                className="flex-shrink-0 rounded flex flex-col items-center justify-center gap-0.5 transition-all active:scale-95"
                 style={{
-                  width: 56, height: 44,
-                  background: 'rgba(255,255,255,0.08)',
-                  border: '1.5px dashed rgba(255,255,255,0.35)',
+                  width: 64, height: 44,
+                  background: uploading ? 'rgba(74,222,128,0.15)' : 'rgba(74,222,128,0.12)',
+                  border: '1.5px dashed rgba(74,222,128,0.5)',
                 }}>
-                <Plus className="size-5 text-white/50" />
+                {uploading
+                  ? <Loader2 className="size-4 text-green-400 animate-spin" />
+                  : <Plus className="size-4 text-green-400" />}
+                <span className="text-green-400 leading-none" style={{ fontSize: 8 }}>
+                  {uploading ? 'Upload...' : 'Dodaj'}
+                </span>
               </button>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Upload error */}
+      {uploadError && (
+        <div className="flex-shrink-0 px-4 py-2 flex items-center gap-2" style={{ background: '#fef2f2' }}>
+          <span className="text-red-600 text-xs flex-1">Greška: {uploadError}</span>
+          <button onClick={() => setUploadError(null)}><X className="size-4 text-red-400" /></button>
         </div>
       )}
 

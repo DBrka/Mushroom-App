@@ -244,7 +244,12 @@ function MushroomCard({ mushroom, tab, onSelect }: { mushroom: Mushroom; tab: ty
       className="text-left rounded-2xl overflow-hidden shadow-sm transition-all active:scale-95"
       style={{ background: 'white', border: '1px solid #e7e5e4' }}>
       <div className="relative h-28">
-        <img src={mushroom.image} alt={mushroom.name} className="w-full h-full object-cover" />
+        <img
+          src={mushroom.images?.[0] ?? mushroom.image}
+          alt={mushroom.name}
+          className="w-full h-full object-cover"
+          onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+        />
         <div className="absolute inset-0"
           style={{ background: 'linear-gradient(to bottom, transparent 40%, rgba(0,0,0,0.5) 100%)' }} />
         <div className="absolute top-2 right-2 size-6 rounded-full flex items-center justify-center"
@@ -275,7 +280,12 @@ function SearchCard({ mushroom, tab, query, onSelect }: {
       className="text-left rounded-2xl overflow-hidden shadow-sm transition-all active:scale-95"
       style={{ background: 'white', border: '1px solid #e7e5e4' }}>
       <div className="relative h-28">
-        <img src={mushroom.image} alt={mushroom.name} className="w-full h-full object-cover" />
+        <img
+          src={mushroom.images?.[0] ?? mushroom.image}
+          alt={mushroom.name}
+          className="w-full h-full object-cover"
+          onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+        />
         <div className="absolute inset-0"
           style={{ background: 'linear-gradient(to bottom, transparent 40%, rgba(0,0,0,0.6) 100%)' }} />
         {/* Category badge top-right */}

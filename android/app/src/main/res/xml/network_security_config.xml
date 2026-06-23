@@ -8,6 +8,9 @@
         <domain includeSubdomains="true">raw.githubusercontent.com</domain>
         <domain includeSubdomains="true">cdn.jsdelivr.net</domain>
         <domain includeSubdomains="true">jsdelivr.net</domain>
+        <domain includeSubdomains="true">purge.jsdelivr.net</domain>
+        <!-- GitHub API za upload slika -->
+        <domain includeSubdomains="true">api.github.com</domain>
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
